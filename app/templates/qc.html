@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>质检看板 - ClauseGuard</title>
+<style>
+body{font-family:"Microsoft YaHei",sans-serif;margin:0;background:#f4f6fa;color:#2c3e50}
+header{background:#1f2d3d;color:#fff;padding:14px 32px;display:flex;justify-content:space-between;align-items:center}
+header h1{font-size:18px;margin:0}
+header a{color:#9fc5e8;text-decoration:none;font-size:13px;margin-left:16px}
+main{max-width:1100px;margin:24px auto;padding:0 16px}
+.cards{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:24px}
+.card{flex:1;min-width:160px;background:#fff;border-radius:8px;padding:18px 20px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.card .num{font-size:26px;font-weight:700;color:#1f2d3d}
+.card .label{font-size:12px;color:#8492a6;margin-top:4px}
+.card.ok .num{color:#1f8f4d}.card.warn .num{color:#d48806}.card.bad .num{color:#c0392b}
+h2{font-size:15px;margin:22px 0 10px}
+table{width:100%;border-collapse:collapse;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.08);border-radius:8px;overflow:hidden}
+th,td{padding:9px 12px;font-size:13px;text-align:left;border-bottom:1px solid #eef1f5}
+th{background:#f7f9fb;color:#5a6b83}
+tr:last-child td{border-bottom:none}
+.badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px}
+.b-high{background:#fdeaea;color:#c0392b}.b-mid{background:#fff6e0;color:#d48806}.b-low{background:#e8f6ee;color:#1f8f4d}
+.btn{border:none;border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer;margin-right:4px}
+.btn-ok{background:#1f8f4d;color:#fff}.btn-warn{background:#d48806;color:#fff}.btn-bad{background:#c0392b;color:#fff}
+.btn-assign{background:#2f6fdb;color:#fff;padding:8px 18px;font-size:14px;border-radius:6px}
+input,textarea{padding:5px;border:1px solid #d8dee6;border-radius:4px;font-size:12px}
+.pending textarea{width:260px}
+.muted{color:#8492a6;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>ClauseGuard 质检看板（F9）</h1>
+  <div>
+    <a href="/">工作台</a><a href="/diff">版本比对</a><a href="/baseline">范本基线</a>
+    <span id="me" class="muted"></span>
+  </div>
+</header>
+<main style="padding:20px 32px;max-width:1100px;margin:0 auto">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <h2 style="margin:0">复核进度</h2>
+    <span>
+      <input id="rate" type="number" min="0" max="1" step="0.1" value="0.2" style="width:60px" title="抽样比例，1为全量">
+      <button class="btn btn-assign" onclick="assign()">生成抽样任务</button>
+      <button class="btn btn-assign" style="background:#1f8f4d" onclick="weekly()">导出周报</button>
+    </span>
+  </div>
+  <div class="cards" id="cards" style="margin-top:12px"></div>
+
+  <h2>各规则准确率 / 误报率</h2>
+  <table id="ruleTable">
+    <tr><th>规则</th><th>维度</th><th>抽样</th><th>已复核</th><th>正确</th><th>错误</th><th>部分正确</th><th>准确率</th><th>误报率</th></tr>
+  </table>
+
+  <h2>待复核抽样（<span id="pendingN">0</span>条）</h2>
+  <table id="pendingTable">
+    <tr><th>ID</th><th>合同</th><th>规则</th><th>等级</th><th>AI结论</th><th>复核意见</th><th>操作</th></tr>
+  </table>
+</main>
+<script>
+const TOKEN = localStorage.getItem('cg_token') || new URLSearchParams(location.search).get('token') || '';
+function H(){return {'X-Token':TOKEN,'Content-Type':'application/json'}}
+
+async function load(){
+  const r = await fetch('/api/qc/overview',{headers:H()});
+  if(r.status===401||r.status===403){alert('需要manager/admin角色登录（/qc?token=...）');return;}
+  const d = await r.json();
+  const p = d.progress;
+  document.getElementById('cards').innerHTML = [
+    ['待复核', p.pending, 'warn'],
+    ['已复核', p.reviewed, 'ok'],
+    ['复核进度', p.progress_rate+'%', ''],
+    ['规则数', d.rule_stats.length, '']
+  ].map(x=>'<div class="card '+x[2]+'"><div class="num">'+x[1]+'</div><div class="label">'+x[0]+'</div></div>').join('');
+  const rt = document.getElementById('ruleTable');
+  rt.querySelectorAll('tr:not(:first-child)').forEach(t=>t.remove());
+  d.rule_stats.forEach(s=>{
+    const acc=s.accuracy_rate==null?'-':s.accuracy_rate+'%';
+    const fpr=s.false_positive_rate==null?'-':s.false_positive_rate+'%';
+    rt.innerHTML += '<tr><td>'+s.rule_name+'</td><td>'+(s.dimension||'-')+'</td><td>'+s.sampled_total+'</td><td>'+s.reviewed_total+'</td><td>'+s.correct_total+'</td><td>'+s.wrong_total+'</td><td>'+s.partial_total+'</td><td><b>'+acc+'</b></td><td>'+fpr+'</td></tr>';
+  });
+  document.getElementById('pendingN').textContent = d.pending.length;
+  const pt = document.getElementById('pendingTable');
+  pt.querySelectorAll('tr:not(:first-child)').forEach(t=>t.remove());
+  d.pending.forEach(q=>{
+    const lv = q.risk_level==='高'?'b-high':(q.risk_level==='低'?'b-low':'b-mid');
+    pt.innerHTML += '<tr><td>'+q.qc_id+'</td><td class="muted">'+q.contract_id+'</td><td>'+q.rule_name+'</td>'+
+      '<td><span class="badge '+lv+'">'+(q.risk_level||'-')+'</span></td>'+
+      '<td class="muted">'+(q.ai_conclusion||q.excerpt||'-').substring(0,60)+'</td>'+
+      '<td class="pending"><textarea id="c'+q.qc_id+'" rows="1" placeholder="复核意见"></textarea></td>'+
+      '<td><button class="btn btn-ok" onclick="review('+q.qc_id+',\'correct\')">正确</button>'+
+      '<button class="btn btn-warn" onclick="review('+q.qc_id+',\'partial\')">部分</button>'+
+      '<button class="btn btn-bad" onclick="review('+q.qc_id+',\'wrong\')">错误</button></td></tr>';
+  });
+}
+
+async function assign(){
+  const rate = parseFloat(document.getElementById('rate').value||'0.2');
+  const r = await fetch('/api/qc/assign',{method:'POST',headers:H(),body:JSON.stringify({rate})});
+  const d = await r.json();
+  alert(r.ok?('抽样完成：'+d.sampled+'/'+d.finding_total+' 条（批次'+d.batch_id+'）'):('失败:'+JSON.stringify(d)));
+  load();
+}
+
+async function review(qcId, verdict){
+  const comment = document.getElementById('c'+qcId).value;
+  const r = await fetch('/api/qc/review',{method:'POST',headers:H(),body:JSON.stringify({qc_id:qcId,verdict,comment})});
+  if(r.ok){load();}else{alert('提交失败');}
+}
+
+function weekly(){window.open('/api/report/weekly');}
+
+fetch('/api/auth/me',{headers:H()}).then(r=>r.ok?r.json():null).then(u=>{
+  if(u)document.getElementById('me').textContent=u.username+'（'+(u.role_name||u.role)+'）';
+});
+load();
+</script>
+</body>
+</html>

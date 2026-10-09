@@ -1,0 +1,15 @@
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+python-docx>=1.1.0
+pdfplumber>=0.11.0
+jinja2>=3.1
+psycopg2-binary>=2.9
+lxml>=5.0
+# --- F5 OCR可选依赖（PaddleOCR，按需安装；未安装时扫描件上传返回安装指引，不影响其他格式） ---
+# CPU版安装（Windows/Linux无GPU，已验证Python3.13+Windows可用）：
+#   pip install paddlepaddle==3.3.1
+#   pip install paddleocr==3.7.0
+# GPU版请参考飞桨官网选择对应CUDA版本：https://www.paddlepaddle.org.cn/install/quick
+# paddlepaddle==3.3.1
+# paddleocr==3.7.0

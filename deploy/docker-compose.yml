@@ -1,0 +1,109 @@
+# ClauseGuard私有化部署编排（F3）
+# 用法：
+#   仅应用+数据库（最小栈）:        docker compose up -d
+#   Ollama本地模型（开发/小客户）:  OLLAMA_RUNTIME=ollama docker compose --profile llm up -d
+#   vLLM本地模型（生产并发）:       OLLAMA_RUNTIME=vllm docker compose --profile llm up -d
+# 说明：数据库镜像采用pgvector版（ankane/pgvector/pg:16），启动时自动CREATE EXTENSION vector；
+#       若扩展不可用，应用侧自动降级float8[]数组余弦，不阻塞部署。
+# GPU：vLLM与Ollama默认声明nvidia GPU（需nvidia-container-toolkit）；纯CPU部署删除deploy/gpu-res背景中的
+#       deploy.resources节即可（vLLM纯CPU极慢，不建议；Ollama可用CPU量化模型）。
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: clauseguard-app:2.0.0
+    container_name: clauseguard-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 容器内固定指向compose网络内的数据库与模型服务（覆盖.env中的本机地址）
+      DATABASE_URL: postgresql://${POSTGRES_USER:-clauseguard}:${POSTGRES_PASSWORD:-Cg%402026pg}@db:5432/${POSTGRES_DB:-clauseguard}
+      LLM_BASE_URL: ${LLM_BASE_URL_CONTAINER:-http://llm:8000/v1}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL_CONTAINER:-http://llm:8000/v1}
+    ports:
+      - "${APP_PORT:-8600}:8600"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;import json;d=json.load(urllib.request.urlopen('http://127.0.0.1:8600/health',timeout=5));assert d['checks'][0]['status']=='ok'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    volumes:
+      - app_storage:/app/storage
+
+  db:
+    image: pgvector/pgvector:pg16   # 内置vector扩展，首次启动自动可用
+    container_name: clauseguard-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-clauseguard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Cg%402026pg}
+      POSTGRES_DB: ${POSTGRES_DB:-clauseguard}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro   # initdb/01-extensions.sql自动CREATE EXTENSION vector
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clauseguard} -d ${POSTGRES_DB:-clauseguard}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # WAL归档与每日全量备份见 scripts/backup_*，恢复演练见 deploy/README.md
+
+  # ---------- 本地模型服务（--profile llm启用）----------
+  # 运行时切换：.env中OLLAMA_RUNTIME=vllm|ollama，或用上方compose命令显式指定
+  llm:
+    image: vllm/vllm-openai:latest
+    container_name: clauseguard-llm
+    restart: unless-stopped
+    profiles: ["llm"]
+    command: >
+      --model ${LLM_MODEL_NAME:-Qwen/Qwen2.5-14B-Instruct-AWQ}
+      --quantization awq
+      --max-model-len 8192
+      --max-num-seqs ${LLM_MAX_CONCURRENCY:-16}
+      --gpu-memory-utilization ${LLM_GPU_MEM_UTIL:-0.90}
+      --host 0.0.0.0 --port 8000
+    ports:
+      - "${LLM_PORT:-8000}:8000"
+    volumes:
+      - llm_models:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: clauseguard-ollama
+    restart: unless-stopped
+    profiles: ["llm-ollama"]
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # 拉取预置模型：docker exec clauseguard-ollama ollama pull qwen2.5:14b
+    # 应用侧注意：Ollama的OpenAI兼容地址为 http://ollama:11434/v1
+
+volumes:
+  db_data:
+  app_storage:
+  llm_models:
+  ollama_models:

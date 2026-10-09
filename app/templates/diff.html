@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>ClauseGuard 条款级版本比对</title>
+<style>
+body{font-family:"Microsoft YaHei",sans-serif;margin:0;background:#f5f6fa;color:#2d3436}
+.header{background:#1e3a5f;color:#fff;padding:14px 24px;font-size:18px;font-weight:bold}
+.wrap{max-width:1100px;margin:20px auto;padding:0 16px}
+.card{background:#fff;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:20px;margin-bottom:16px}
+select,button{padding:8px 12px;border:1px solid #ccc;border-radius:4px;font-size:14px}
+button{background:#1e6fb8;color:#fff;border:none;cursor:pointer}
+button:hover{background:#155a99}
+.summary span{display:inline-block;margin-right:16px;padding:4px 10px;border-radius:4px;font-size:13px}
+.added{background:#e6f7e6;color:#1a7f37}.removed{background:#fdecea;color:#c0392b}
+.modified{background:#fff7e0;color:#a67c00}.high{background:#fdecea;color:#c0392b;font-weight:bold}
+.item{border-left:4px solid #ddd;padding:10px 14px;margin:10px 0;background:#fafafa}
+.item.added{border-color:#2ecc71}.item.removed{border-color:#e74c3c}
+.item.modified{border-color:#f39c12}.item.modified.high{border-color:#c0392b;background:#fff5f5}
+.badge{font-size:12px;padding:2px 8px;border-radius:10px;color:#fff;margin-right:8px}
+.badge.added{background:#2ecc71}.badge.removed{background:#e74c3c}
+.badge.modified{background:#f39c12}.badge.unchanged{background:#95a5a6}
+.high-badge{background:#c0392b;color:#fff;font-size:12px;padding:2px 8px;border-radius:10px}
+.ins{background:#e6f7e6;text-decoration:none}.del{background:#fdecea;text-decoration:line-through}
+.diff-line{font-size:13px;padding:2px 6px;margin:2px 0;white-space:pre-wrap}
+.title-changed{color:#c0392b}
+</style>
+</head>
+<body>
+<div class="header">ClauseGuard · 条款级版本比对</div>
+<div class="wrap">
+  <div class="card">
+    旧版本：
+    <select id="oldSel"></select>
+    新版本：
+    <select id="newSel"></select>
+    <button onclick="doDiff()">开始比对</button>
+    <span id="msg" style="margin-left:12px;color:#c0392b"></span>
+  </div>
+  <div class="card summary" id="summary" style="display:none"></div>
+  <div class="card" id="items"></div>
+</div>
+<script>
+async function init(){
+  const r=await fetch('/api/contracts');
+  if(r.status===401){location.href='/';return;}
+  const list=await r.json();
+  for(const sel of [document.getElementById('oldSel'),document.getElementById('newSel')]){
+    sel.innerHTML=list.map(c=>`<option value="${c.contract_id}">${c.filename}（${c.contract_id}）</option>`).join('');
+  }
+}
+async function doDiff(){
+  const old=document.getElementById('oldSel').value,newv=document.getElementById('newSel').value;
+  const msg=document.getElementById('msg');msg.textContent='';
+  const r=await fetch(`/api/contracts/${old}/diff`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_id:newv})});
+  if(!r.ok){msg.textContent=(await r.json()).detail||'比对失败';return;}
+  const data=await r.json();
+  const s=data.summary;
+  document.getElementById('summary').style.display='block';
+  document.getElementById('summary').innerHTML=
+    `<span>共${s.total}条</span><span class="added">新增${s.added}</span>`+
+    `<span class="removed">删除${s.removed}</span><span class="modified">修改${s.modified}</span>`+
+    `<span>未变${s.unchanged}</span><span class="high">高危改动${s.high_risk}</span>`;
+  const esc=t=>(t||'').replace(/</g,'&lt;');
+  document.getElementById('items').innerHTML=data.items.filter(i=>i.change_type!=='unchanged').map(i=>{
+    const cls=i.change_type+(i.is_high_risk?' high':'');
+    const badge=i.is_high_risk&&i.change_type!=='unchanged'?'<span class="high-badge">高危（金额/期限/责任）</span>':'';
+    const title=i.change_type==='removed'?esc(i.old_title):esc(i.new_title);
+    const tch=i.title_changed?`<span class="title-changed">《${esc(i.old_title)}》→《${esc(i.new_title)}》</span>`:'';
+    const lines=(i.para_diff||[]).map(d=>d.type==='same'?`<div class="diff-line">${esc(d.text)}</div>`
+      :d.type==='insert'?`<div class="diff-line ins">＋ ${esc(d.text)}</div>`
+      :`<div class="diff-line del">－ ${esc(d.text)}</div>`).join('');
+    return `<div class="item ${cls}"><span class="badge ${i.change_type}">${{added:'新增',removed:'删除',modified:'修改',unchanged:'未变'}[i.change_type]}</span>${badge}第${i.clause_id||'—'}条 ${title} ${tch}${i.change_type==='modified'?`<span style="color:#999;font-size:12px">（相似度${Math.round(i.content_similarity*100)}%）</span>`:''}${lines?`<div style="margin-top:6px">${lines}</div>`:''}</div>`;
+  }).join('')||'<p>两版本条款完全一致。</p>';
+}
+init();
+</script>
+</body>
+</html>

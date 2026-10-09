@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 运行时生成
+storage/
+*.log
+
+# 头脑风暴预览缓存
+.superpowers/
+
+# IDE
+.idea/
+.vscode/

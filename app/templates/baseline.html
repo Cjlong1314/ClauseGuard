@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>ClauseGuard 范本基线管理</title>
+<style>
+body{font-family:"Microsoft YaHei",sans-serif;margin:0;background:#f5f6fa;color:#2d3436}
+.header{background:#1e3a5f;color:#fff;padding:14px 24px;font-size:18px;font-weight:bold}
+.wrap{max-width:1150px;margin:20px auto;padding:0 16px}
+.card{background:#fff;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:20px;margin-bottom:16px}
+input,select,textarea,button{padding:8px 12px;border:1px solid #ccc;border-radius:4px;font-size:14px}
+textarea{width:100%;box-sizing:border-box;font-family:inherit}
+button{background:#1e6fb8;color:#fff;border:none;cursor:pointer;margin-right:8px}
+button:hover{background:#155a99}
+button.ghost{background:#95a5a6}button.danger{background:#c0392b}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{border-bottom:1px solid #eee;padding:8px 10px;text-align:left;vertical-align:top}
+th{background:#f0f3f7}
+.tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;color:#fff;margin-right:4px}
+.tag.missing{background:#e74c3c}.tag.deviation{background:#f39c12}.tag.unfavorable{background:#8e44ad}
+.tag.ok{background:#27ae60}.high-badge{background:#c0392b;color:#fff;font-size:12px;padding:2px 8px;border-radius:10px}
+.item{border-left:4px solid #ddd;padding:10px 14px;margin:10px 0;background:#fafafa}
+.item.missing{border-color:#e74c3c}.item.deviation{border-color:#f39c12}
+.item.unfavorable{border-color:#8e44ad;background:#f9f2fb}.item.ok{border-color:#27ae60}
+.summary span{display:inline-block;margin-right:16px;padding:4px 10px;border-radius:4px;font-size:13px}
+.muted{color:#7f8c8d;font-size:12px}
+#msg{color:#c0392b;margin-left:12px}
+.row{margin:8px 0}
+h3{margin:6px 0 12px}
+</style>
+</head>
+<body>
+<div class="header">ClauseGuard · 范本基线管理与企业差异审查（F4） <a href="/" style="color:#fff;font-size:13px;float:right">返回工作台</a></div>
+<div class="wrap">
+
+<div class="card">
+  <h3>范本基线列表</h3>
+  <div class="row">
+    <input id="q" placeholder="按名称/类型/业务线搜索" style="width:220px">
+    <select id="ftype"><option value="">全部合同类型</option></select>
+    <select id="fstatus"><option value="active">启用</option><option value="archived">归档</option><option value="">全部状态</option></select>
+    <button onclick="loadList()">查询</button>
+  </div>
+  <table id="tbl">
+    <thead><tr><th>名称</th><th>合同类型</th><th>业务线</th><th>主体立场</th><th>版本</th><th>状态</th><th>操作</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h3 id="formTitle">新增范本基线</h3>
+  <input type="hidden" id="bid">
+  <div class="row">
+    名称：<input id="bname" style="width:200px">
+    合同类型：<input id="btype" placeholder="如 买卖" style="width:120px">
+    业务线：<input id="bline" placeholder="如 采购" style="width:120px">
+    主体立场：<input id="bstance" placeholder="如 买方" style="width:120px">
+  </div>
+  <div class="row"><textarea id="bcontent" rows="8" placeholder="范本条款内容，支持「第一条/1.1」编号格式"></textarea></div>
+  <div class="row"><textarea id="bsug" rows="3" placeholder="建议措辞JSON：{&quot;条款标题子串&quot;:&quot;建议措辞文本&quot;}（可选）"></textarea></div>
+  <div class="row">
+    <button onclick="saveBaseline()">保存</button>
+    <button class="ghost" onclick="resetForm()">清空</button>
+    <span class="muted">保存content变更会自动升版本并记录历史</span>
+  </div>
+</div>
+
+<div class="card">
+  <h3>差异审查（对照范本基线）</h3>
+  <div class="row">
+    待审合同：<select id="cSel"></select>
+    基线：<select id="bSel"></select>
+    版本：<input id="bver" type="number" min="0" placeholder="留空=最新" style="width:90px">
+    <button onclick="doCheck()">执行差异审查</button>
+    <span id="msg"></span>
+  </div>
+  <div class="card summary" id="summary" style="display:none"></div>
+  <div id="items"></div>
+  <div id="verHist"></div>
+</div>
+
+</div>
+<script>
+const headers={'Content-Type':'application/json'};
+async function jget(u){const r=await fetch(u,{headers});if(r.status===401){location.href='/';throw 0;}return r.json();}
+async function loadContracts(){
+  const list=await jget('/api/contracts');
+  document.getElementById('cSel').innerHTML=list.map(c=>`<option value="${c.contract_id}">${c.filename}（${c.contract_id}）</option>`).join('');
+}
+async function loadList(){
+  const q=document.getElementById('q').value,t=document.getElementById('ftype').value,s=document.getElementById('fstatus').value;
+  const list=await jget(`/api/baselines?q=${encodeURIComponent(q)}&contract_type=${encodeURIComponent(t)}&status=${encodeURIComponent(s)}`);
+  const tb=document.querySelector('#tbl tbody');
+  tb.innerHTML=list.map(b=>`<tr>
+    <td>${b.name}</td><td>${b.contract_type||''}</td><td>${b.business_line||''}</td>
+    <td>${b.stance||''}</td><td>v${b.version}</td><td>${b.status}</td>
+    <td><button class="ghost" onclick="editBaseline('${b.baseline_id}')">编辑</button>
+        <button class="ghost" onclick="loadVersions('${b.baseline_id}')">版本历史</button>
+        <button class="danger" onclick="delBaseline('${b.baseline_id}')">删除</button></td>
+  </tr>`).join('')||'<tr><td colspan="7" class="muted">暂无基线</td></tr>';
+  const types=[...new Set(list.map(b=>b.contract_type).filter(Boolean))];
+  const sel=document.getElementById('ftype'),cur=sel.value;
+  sel.innerHTML='<option value="">全部合同类型</option>'+types.map(t=>`<option ${t===cur?'selected':''}>${t}</option>`).join('');
+  document.getElementById('bSel').innerHTML=list.map(b=>`<option value="${b.baseline_id}">${b.name}（v${b.version}）</option>`).join('');
+}
+async function saveBaseline(){
+  const msg=document.getElementById('msg');msg.textContent='';
+  let sug={};const raw=document.getElementById('bsug').value.trim();
+  if(raw){try{sug=JSON.parse(raw);}catch(e){msg.textContent='建议措辞JSON格式有误';return;}}
+  const body={name:document.getElementById('bname').value,contract_type:document.getElementById('btype').value,
+    business_line:document.getElementById('bline').value,stance:document.getElementById('bstance').value,
+    content:document.getElementById('bcontent').value,suggestions:sug};
+  const bid=document.getElementById('bid').value;
+  const r=await fetch(bid?`/api/baselines/${bid}`:'/api/baselines',{method:bid?'PUT':'POST',headers,body:JSON.stringify(body)});
+  if(!r.ok){msg.textContent=(await r.json()).detail||'保存失败';return;}
+  resetForm();loadList();
+}
+async function editBaseline(bid){
+  const b=await jget(`/api/baselines/${bid}`);
+  document.getElementById('formTitle').textContent='编辑范本基线（当前v'+b.version+'）';
+  document.getElementById('bid').value=b.baseline_id;
+  document.getElementById('bname').value=b.name;document.getElementById('btype').value=b.contract_type||'';
+  document.getElementById('bline').value=b.business_line||'';document.getElementById('bstance').value=b.stance||'';
+  document.getElementById('bcontent').value=b.content||'';
+  document.getElementById('bsug').value=JSON.stringify(b.suggestions||{},null,1);
+}
+function resetForm(){
+  document.getElementById('formTitle').textContent='新增范本基线';
+  ['bid','bname','btype','bline','bstance','bcontent','bsug'].forEach(i=>document.getElementById(i).value='');
+}
+async function delBaseline(bid){
+  if(!confirm('确认删除该基线？'))return;
+  const r=await fetch(`/api/baselines/${bid}`,{method:'DELETE'});
+  if(!r.ok){document.getElementById('msg').textContent='删除失败';return;}
+  if(document.getElementById('bid').value===bid)resetForm();
+  loadList();
+}
+async function loadVersions(bid){
+  const vs=await jget(`/api/baselines/${bid}/versions`);
+  document.getElementById('verHist').innerHTML=`<h3>版本历史（${bid}）</h3><table><thead><tr><th>版本</th><th>说明</th><th>更新人</th><th>时间</th></tr></thead><tbody>`+
+    vs.map(v=>`<tr><td>v${v.version}</td><td>${v.comment||''}</td><td>${v.updated_by||''}</td><td>${v.updated_at}</td></tr>`).join('')+'</tbody></table>';
+}
+async function doCheck(){
+  const msg=document.getElementById('msg');msg.textContent='';
+  const cid=document.getElementById('cSel').value,bid=document.getElementById('bSel').value;
+  const ver=document.getElementById('bver').value;
+  if(!cid||!bid){msg.textContent='请先选择合同与基线';return;}
+  const r=await fetch(`/api/contracts/${cid}/baseline-check`,{method:'POST',headers,
+    body:JSON.stringify({baseline_id:bid,...(ver?{version:+ver}:{})})});
+  if(!r.ok){msg.textContent=(await r.json()).detail||'审查失败';return;}
+  const data=await r.json(),s=data.summary;
+  document.getElementById('summary').style.display='block';
+  document.getElementById('summary').innerHTML=
+    `<span class="modified">基线条款：${s.baseline_total}</span><span class="removed">缺失：${s.missing}</span>`+
+    `<span class="modified">改写偏离：${s.deviation}</span><span class="high">不利己方：${s.unfavorable}</span>`+
+    `<span class="added">符合：${s.ok}</span><span class="high">高危：${s.high_risk}</span><span>偏离率：${s.deviation_rate}%</span>`;
+  const typeMap={missing:'缺失',deviation:'改写偏离',unfavorable:'不利于己方',ok:'符合'};
+  document.getElementById('items').innerHTML=data.items.map(it=>{
+    const bi=it.baseline_item||{};
+    return `<div class="item ${it.type}"><span class="tag ${it.type}">${typeMap[it.type]}</span>`+
+      (it.is_high_risk?'<span class="high-badge">高危</span>':'')+
+      `<b>${bi.title||it.title||'条款'}</b> <span class="muted">相似度${it.similarity}%</span>`+
+      `<div class="muted">范本：${(bi.content||'').slice(0,120)||'（基线外条款）'}</div>`+
+      (it.suggestion?`<div>💡 ${it.suggestion}</div>`:'')+'</div>';
+  }).join('')||'<div class="muted">无差异</div>';
+}
+(async function init(){
+  try{await loadContracts();await loadList();}catch(e){}
+})();
+</script>
+</body>
+</html>
